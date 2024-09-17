@@ -25,13 +25,14 @@ function run() {
     .option('-Y, --ods', 'emit ODS  to <sheetname> or <file>.ods')
     .option('-8, --xls', 'emit XLS  to <sheetname> or <file>.xls (BIFF8)')
     .option('-5, --biff5', 'emit XLS  to <sheetname> or <file>.xls (BIFF5)')
-    //.option('-4, --biff4','emit XLS  to <sheetname> or <file>.xls (BIFF4)')
-    //.option('-3, --biff3','emit XLS  to <sheetname> or <file>.xls (BIFF3)')
+    .option('-4, --biff4', 'emit XLS  to <sheetname> or <file>.xls (BIFF4)')
+    .option('-3, --biff3', 'emit XLS  to <sheetname> or <file>.xls (BIFF3)')
     .option('-2, --biff2', 'emit XLS  to <sheetname> or <file>.xls (BIFF2)')
     .option('-i, --xla', 'emit XLA to <sheetname> or <file>.xla')
     .option('-6, --xlml', 'emit SSML to <sheetname> or <file>.xls (2003 XML)')
     .option('-T, --fods', 'emit FODS to <sheetname> or <file>.fods (Flat ODS)')
     .option('--wk3', 'emit WK3  to <sheetname> or <file>.txt (Lotus WK3)')
+    .option('--numbers', 'emit NUMBERS to <sheetname> or <file>.numbers')
 
     .option('-S, --formulae', 'emit list of values and formulae')
     .option('-j, --json', 'emit formatted JSON (all fields text)')
@@ -75,6 +76,7 @@ function run() {
     ['xls', 'xls', 'xls'],
     ['xla', 'xla', 'xla'],
     ['biff5', 'biff5', 'xls'],
+    ['numbers', 'numbers', 'numbers'],
     ['ods', 'ods', 'ods'],
     ['fods', 'fods', 'fods'],
     ['wk3', 'wk3', 'wk3']
@@ -114,6 +116,7 @@ function run() {
     seen = true;
     opts.cellFormula = true;
     opts.cellNF = true;
+    opts.xlfn = true;
     if (program.output) sheetname = program.output;
   }
   function isfmt(m/*:string*/)/*:boolean*/ {
@@ -138,6 +141,7 @@ function run() {
     opts.cellStyles = true;
     opts.sheetStubs = true;
     opts.cellDates = true;
+    wopts.cellFormula = true;
     wopts.cellStyles = true;
     wopts.sheetStubs = true;
     wopts.bookVBA = true;
@@ -176,6 +180,10 @@ function run() {
   workbook_formats.forEach(function (m) {
     if (program[m[0]] || isfmt(m[0])) {
       wopts.bookType = m[1];
+      if (wopts.bookType == "numbers") try {
+        var XLSX_ZAHL = require("xlsx/dist/xlsx.zahl");
+        wopts.numbers = XLSX_ZAHL;
+      } catch(e) {}
       if (wb) X.writeFile(wb, program.output || sheetname || ((filename || "") + "." + m[2]), wopts);
       process.exit(0);
     }

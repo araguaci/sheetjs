@@ -44,6 +44,17 @@ function encode_range(cs/*:CellAddrSpec|Range*/,ce/*:?CellAddrSpec*/)/*:string*/
 /*:: if(typeof ce !== 'string') throw "unreachable"; */
 	return cs == ce ? cs : cs + ":" + ce;
 }
+function fix_range(a1/*:string*/)/*:string*/ {
+	var s = decode_range(a1);
+	return "$" + encode_col(s.s.c) + "$" + encode_row(s.s.r) + ":$" + encode_col(s.e.c) + "$" + encode_row(s.e.r);
+}
+
+// List of invalid characters needs to be tested further
+function formula_quote_sheet_name(sname/*:string*/, opts)/*:string*/ {
+	if(!sname && !(opts && opts.biff <= 5 && opts.biff >= 2)) throw new Error("empty sheet name");
+	if (/[^\w\u4E00-\u9FFF\u3040-\u30FF]/.test(sname)) return "'" + sname.replace(/'/g, "''") + "'";
+	return sname;
+}
 
 function safe_decode_range(range/*:string*/)/*:Range*/ {
 	var o = {s:{c:0,r:0},e:{c:0,r:0}};
@@ -61,7 +72,8 @@ function safe_decode_range(range/*:string*/)/*:Range*/ {
 	}
 	o.s.r = --idx;
 
-	if(i === len || range.charCodeAt(++i) === 58) { o.e.c=o.s.c; o.e.r=o.s.r; return o; }
+	if(i === len || cc != 10) { o.e.c=o.s.c; o.e.r=o.s.r; return o; }
+	++i;
 
 	for(idx = 0; i != len; ++i) {
 		if((cc=range.charCodeAt(i)-64) < 1 || cc > 26) break;
@@ -79,8 +91,8 @@ function safe_decode_range(range/*:string*/)/*:Range*/ {
 
 function safe_format_cell(cell/*:Cell*/, v/*:any*/) {
 	var q = (cell.t == 'd' && v instanceof Date);
-	if(cell.z != null) try { return (cell.w = SSF.format(cell.z, q ? datenum(v) : v)); } catch(e) { }
-	try { return (cell.w = SSF.format((cell.XF||{}).numFmtId||(q ? 14 : 0),  q ? datenum(v) : v)); } catch(e) { return ''+v; }
+	if(cell.z != null) try { return (cell.w = SSF_format(cell.z, q ? datenum(v) : v)); } catch(e) { }
+	try { return (cell.w = SSF_format((cell.XF||{}).numFmtId||(q ? 14 : 0),  q ? datenum(v) : v)); } catch(e) { return ''+v; }
 }
 
 function format_cell(cell/*:Cell*/, v/*:any*/, o/*:any*/) {
@@ -144,9 +156,9 @@ function sheet_add_aoa(_ws/*:?Worksheet*/, data/*:AOA*/, opts/*:?any*/)/*:Worksh
 				else if(typeof cell.v === 'number') cell.t = 'n';
 				else if(typeof cell.v === 'boolean') cell.t = 'b';
 				else if(cell.v instanceof Date) {
-					cell.z = o.dateNF || SSF._table[14];
-					if(o.cellDates) { cell.t = 'd'; cell.w = SSF.format(cell.z, datenum(cell.v)); }
-					else { cell.t = 'n'; cell.v = datenum(cell.v); cell.w = SSF.format(cell.z, cell.v); }
+					cell.z = o.dateNF || table_fmt[14];
+					if(o.cellDates) { cell.t = 'd'; cell.w = SSF_format(cell.z, datenum(cell.v, o.date1904)); }
+					else { cell.t = 'n'; cell.v = datenum(cell.v, o.date1904); cell.w = SSF_format(cell.z, cell.v); }
 				}
 				else cell.t = 's';
 			}

@@ -1,4 +1,4 @@
-var WK_ = /*#__PURE__*/ (function() {
+var WK_ = /*#__PURE__*/(function() {
 	function lotushopper(data, cb/*:RecordHopperCB*/, opts/*:any*/) {
 		if(!data) return;
 		prep_blob(data, data.l || 0);
@@ -16,7 +16,7 @@ var WK_ = /*#__PURE__*/ (function() {
 
 	function lotus_to_workbook(d/*:RawData*/, opts) {
 		switch(opts.type) {
-			case 'base64': return lotus_to_workbook_buf(s2a(Base64.decode(d)), opts);
+			case 'base64': return lotus_to_workbook_buf(s2a(Base64_decode(d)), opts);
 			case 'binary': return lotus_to_workbook_buf(s2a(d), opts);
 			case 'buffer':
 			case 'array': return lotus_to_workbook_buf(d, opts);
@@ -28,11 +28,18 @@ var WK_ = /*#__PURE__*/ (function() {
 		if(!d) return d;
 		var o = opts || {};
 		if(DENSE != null && o.dense == null) o.dense = DENSE;
-		var s/*:Worksheet*/ = ((o.dense ? [] : {})/*:any*/), n = "Sheet1", sidx = 0;
-		var sheets = {}, snames = [n], realnames = [];
+		var s/*:Worksheet*/ = ((o.dense ? [] : {})/*:any*/), n = "Sheet1", next_n = "", sidx = 0;
+		var sheets = {}, snames = [], realnames = [];
 
 		var refguess = {s: {r:0, c:0}, e: {r:0, c:0} };
 		var sheetRows = o.sheetRows || 0;
+
+		if(d[4] == 0x51 && d[5] == 0x50 && d[6] == 0x57) return qpw_to_workbook_buf(d, opts);
+		if(d[2] == 0x00) {
+			if(d[3] == 0x08 || d[3] == 0x09) {
+				if(d.length >= 16 && d[14] == 0x05 && d[15] === 0x6c) throw new Error("Unsupported Works 3 for Mac file");
+			}
+		}
 
 		if(d[2] == 0x02) {
 			o.Enum = WK1Enum;
@@ -41,19 +48,38 @@ var WK_ = /*#__PURE__*/ (function() {
 					o.vers = val;
 					if(val >= 0x1000) o.qpro = true;
 					break;
+				case 0xFF: /* BOF (works 3+) */
+					o.vers = val;
+					o.works = true;
+					break;
 				case 0x06: refguess = val; break; /* RANGE */
+				case 0xCC: if(val) next_n = val; break; /* SHEETNAMECS */
+				case 0xDE: next_n = val; break; /* SHEETNAMELP */
 				case 0x0F: /* LABEL */
 				case 0x33: /* STRING */
-					if(!o.qpro) val[1].v = val[1].v.slice(1);
+					if((!o.qpro && !o.works || RT == 0x33) && val[1].v.charCodeAt(0) < 0x30) val[1].v = val[1].v.slice(1);
+					if(o.works || o.works2) val[1].v = val[1].v.replace(/\r\n/g, "\n");
 					/* falls through */
 				case 0x0D: /* INTEGER */
 				case 0x0E: /* NUMBER */
 				case 0x10: /* FORMULA */
 					/* TODO: actual translation of the format code */
 					if(RT == 0x0E && (val[2] & 0x70) == 0x70 && (val[2] & 0x0F) > 1 && (val[2] & 0x0F) < 15) {
-						val[1].z = o.dateNF || SSF._table[14];
+						val[1].z = o.dateNF || table_fmt[14];
 						if(o.cellDates) { val[1].t = 'd'; val[1].v = numdate(val[1].v); }
 					}
+
+					if(o.qpro) {
+						if(val[3] > sidx) {
+							s["!ref"] = encode_range(refguess);
+							sheets[n] = s;
+							snames.push(n);
+							s = (o.dense ? [] : {});
+							refguess = {s: {r:0, c:0}, e: {r:0, c:0} };
+							sidx = val[3]; n = next_n || "Sheet" + (sidx + 1); next_n = "";
+						}
+					}
+
 					var tmpcell = o.dense ? (s[val[0].r]||[])[val[0].c] : s[encode_cell(val[0])];
 					if(tmpcell) {
 						tmpcell.t = val[1].t; tmpcell.v = val[1].v;
@@ -66,14 +92,18 @@ var WK_ = /*#__PURE__*/ (function() {
 						s[val[0].r][val[0].c] = val[1];
 					} else s[encode_cell(val[0])] = val[1];
 					break;
+				case 0x5405: o.works2 = true; break;
 				default:
 			}}, o);
 		} else if(d[2] == 0x1A || d[2] == 0x0E) {
 			o.Enum = WK3Enum;
 			if(d[2] == 0x0E) { o.qpro = true; d.l = 0; }
 			lotushopper(d, function(val, R, RT) { switch(RT) {
+				case 0xCC: n = val; break; /* SHEETNAMECS */
 				case 0x16: /* LABEL16 */
-					val[1].v = val[1].v.slice(1);
+					if(val[1].v.charCodeAt(0) < 0x30) val[1].v = val[1].v.slice(1);
+					// TODO: R9 appears to encode control codes this way -- verify against other versions
+					val[1].v = val[1].v.replace(/\x0F./g, function($$) { return String.fromCharCode($$.charCodeAt(1) - 0x20); }).replace(/\r\n/g, "\n");
 					/* falls through */
 				case 0x17: /* NUMBER17 */
 				case 0x18: /* NUMBER18 */
@@ -84,10 +114,10 @@ var WK_ = /*#__PURE__*/ (function() {
 					if(val[3] > sidx) {
 						s["!ref"] = encode_range(refguess);
 						sheets[n] = s;
+						snames.push(n);
 						s = (o.dense ? [] : {});
 						refguess = {s: {r:0, c:0}, e: {r:0, c:0} };
 						sidx = val[3]; n = "Sheet" + (sidx + 1);
-						snames.push(n);
 					}
 					if(sheetRows > 0 && val[0].r >= sheetRows) break;
 					if(o.dense) {
@@ -100,17 +130,23 @@ var WK_ = /*#__PURE__*/ (function() {
 				case 0x1B: /* XFORMAT */
 					if(val[0x36b0]) realnames[val[0x36b0][0]] = val[0x36b0][1];
 					break;
+				case 0x0601: /* SHEETINFOQP */
+					realnames[val[0]] = val[1]; if(val[0] == sidx) n = val[1]; break;
 				default: break;
 			}}, o);
 		} else throw new Error("Unrecognized LOTUS BOF " + d[2]);
-
 		s["!ref"] = encode_range(refguess);
-		sheets[n] = s;
+		sheets[next_n || n] = s;
+		snames.push(next_n || n);
 		if(!realnames.length) return { SheetNames: snames, Sheets: sheets };
 		var osheets = {}, rnames = [];
+		/* TODO: verify no collisions */
 		for(var i = 0; i < realnames.length; ++i) if(sheets[snames[i]]) {
+			rnames.push(realnames[i] || snames[i]);
+			osheets[realnames[i]] = sheets[realnames[i]] || sheets[snames[i]];
+		} else {
 			rnames.push(realnames[i]);
-			osheets[realnames[i]] = sheets[snames[i]];
+			osheets[realnames[i]] = ({ "!ref": "A1" });
 		}
 		return { SheetNames: rnames, Sheets: osheets };
 	}
@@ -126,7 +162,8 @@ var WK_ = /*#__PURE__*/ (function() {
 
 		write_biff_rec(ba, 0x00, write_BOF_WK1(0x0406));
 		write_biff_rec(ba, 0x06, write_RANGE(range));
-		for(var R = range.s.r; R <= range.e.r; ++R) {
+		var max_R = Math.min(range.e.r, 8191);
+		for(var R = range.s.r; R <= max_R; ++R) {
 			var rr = encode_row(R);
 			for(var C = range.s.c; C <= range.e.c; ++C) {
 				if(R === range.s.r) cols[C] = encode_col(C);
@@ -165,7 +202,8 @@ var WK_ = /*#__PURE__*/ (function() {
 			var range = safe_decode_range(ws["!ref"]);
 			var dense = Array.isArray(ws);
 			var cols = [];
-			for(var R = range.s.r; R <= range.e.r; ++R) {
+			var max_R = Math.min(range.e.r, 8191);
+			for(var R = range.s.r; R <= max_R; ++R) {
 				var rr = encode_row(R);
 				for(var C = range.s.c; C <= range.e.c; ++C) {
 					if(R === range.s.r) cols[C] = encode_col(C);
@@ -211,6 +249,7 @@ var WK_ = /*#__PURE__*/ (function() {
 			if(rows < range.e.r) rows = range.e.r;
 			if(cols < range.e.c) cols = range.e.c;
 		}
+		if(rows > 8191) rows = 8191;
 		out.write_shift(2, rows);
 		out.write_shift(1, wscnt);
 		out.write_shift(1, cols);
@@ -223,12 +262,23 @@ var WK_ = /*#__PURE__*/ (function() {
 		return out;
 	}
 
-	function parse_RANGE(blob) {
+	function parse_RANGE(blob, length, opts) {
 		var o = {s:{c:0,r:0},e:{c:0,r:0}};
+		if(length == 8 && opts.qpro) {
+			o.s.c = blob.read_shift(1);
+			blob.l++;
+			o.s.r = blob.read_shift(2);
+			o.e.c = blob.read_shift(1);
+			blob.l++;
+			o.e.r = blob.read_shift(2);
+			return o;
+		}
 		o.s.c = blob.read_shift(2);
 		o.s.r = blob.read_shift(2);
+		if(length == 12 && opts.qpro) blob.l += 2;
 		o.e.c = blob.read_shift(2);
 		o.e.r = blob.read_shift(2);
+		if(length == 12 && opts.qpro) blob.l += 2;
 		if(o.s.c == 0xFFFF) o.s.c = o.e.c = o.s.r = o.e.r = 0;
 		return o;
 	}
@@ -242,12 +292,15 @@ var WK_ = /*#__PURE__*/ (function() {
 	}
 
 	function parse_cell(blob, length, opts) {
-		var o = [{c:0,r:0}, {t:'n',v:0}, 0];
+		var o = [{c:0,r:0}, {t:'n',v:0}, 0, 0];
 		if(opts.qpro && opts.vers != 0x5120) {
 			o[0].c = blob.read_shift(1);
-			blob.l++;
+			o[3] = blob.read_shift(1);
 			o[0].r = blob.read_shift(2);
 			blob.l+=2;
+		} else if(opts.works) { // TODO: verify with more complex works3-4 examples
+			o[0].c = blob.read_shift(2); o[0].r = blob.read_shift(2);
+			o[2] = blob.read_shift(2);
 		} else {
 			o[2] = blob.read_shift(1);
 			o[0].c = blob.read_shift(2); o[0].r = blob.read_shift(2);
@@ -281,6 +334,18 @@ var WK_ = /*#__PURE__*/ (function() {
 			o.write_shift(1, cc >= 0x80 ? 0x5F : cc);
 		}
 		o.write_shift(1, 0);
+		return o;
+	}
+	function parse_STRING(blob, length, opts) {
+		var tgt = blob.l + length;
+		var o = parse_cell(blob, length, opts);
+		o[1].t = 's';
+		if(opts.vers == 0x5120) {
+			var len = blob.read_shift(1);
+			o[1].v = blob.read_shift(len, 'utf8');
+			return o;
+		}
+		o[1].v = blob.read_shift(tgt - blob.l, 'cstr');
 		return o;
 	}
 
@@ -332,32 +397,105 @@ var WK_ = /*#__PURE__*/ (function() {
 		V = (rel ? B : 0) + ((V >= 0x2000) ? V - 0x4000 : V);
 		return (rel ? "" : "$") + (col ? encode_col(V) : encode_row(V));
 	}
-	var oprec = [
+	/* var oprec = [
 		8, 8, 8, 8, 8, 8, 8, 8, 6, 4, 4, 5, 5, 7, 3, 3,
 		3, 3, 3, 3, 1, 1, 2, 6, 8, 8, 8, 8, 8, 8, 8, 8
-	];
+	]; */
 	/* TODO: flesh out */
 	var FuncTab = {
+		0x1F: ["NA", 0],
+		// 0x20: ["ERR", 0],
+		0x21: ["ABS", 1],
+		0x22: ["TRUNC", 1],
+		0x23: ["SQRT", 1],
+		0x24: ["LOG", 1],
+		0x25: ["LN", 1],
+		0x26: ["PI", 0],
+		0x27: ["SIN", 1],
+		0x28: ["COS", 1],
+		0x29: ["TAN", 1],
+		0x2A: ["ATAN2", 2],
+		0x2B: ["ATAN", 1],
+		0x2C: ["ASIN", 1],
+		0x2D: ["ACOS", 1],
+		0x2E: ["EXP", 1],
+		0x2F: ["MOD", 2],
+		// 0x30
+		0x31: ["ISNA", 1],
+		0x32: ["ISERR", 1],
 		0x33: ["FALSE", 0],
 		0x34: ["TRUE", 0],
+		0x35: ["RAND", 0],
+		// 0x36 DATE
+		// 0x37 NOW
+		// 0x38 PMT
+		// 0x39 PV
+		// 0x3A FV
+		// 0x3B IF
+		// 0x3C DAY
+		// 0x3D MONTH
+		// 0x3E YEAR
+		0x3F: ["ROUND", 2],
+		// 0x40 TIME
+		// 0x41 HOUR
+		// 0x42 MINUTE
+		// 0x43 SECOND
+		0x44: ["ISNUMBER", 1],
+		0x45: ["ISTEXT", 1],
 		0x46: ["LEN", 1],
+		0x47: ["VALUE", 1],
+		// 0x48: ["FIXED", ?? 1],
+		0x49: ["MID", 3],
+		0x4A: ["CHAR", 1],
+		// 0x4B
+		// 0x4C FIND
+		// 0x4D DATEVALUE
+		// 0x4E TIMEVALUE
+		// 0x4F CELL
 		0x50: ["SUM", 69],
 		0x51: ["AVERAGEA", 69],
 		0x52: ["COUNTA", 69],
 		0x53: ["MINA", 69],
 		0x54: ["MAXA", 69],
+		// 0x55 VLOOKUP
+		// 0x56 NPV
+		// 0x57 VAR
+		// 0x58 STD
+		// 0x59 IRR
+		// 0x5A HLOOKUP
+		// 0x5B DSUM
+		// 0x5C DAVERAGE
+		// 0x5D DCOUNTA
+		// 0x5E DMIN
+		// 0x5F DMAX
+		// 0x60 DVARP
+		// 0x61 DSTDEVP
+		// 0x62 INDEX
+		// 0x63 COLS
+		// 0x64 ROWS
+		// 0x65 REPEAT
+		0x66: ["UPPER", 1],
+		0x67: ["LOWER", 1],
+		// 0x68 LEFT
+		// 0x69 RIGHT
+		// 0x6A REPLACE
+		0x6B: ["PROPER", 1],
+		// 0x6C CELL
+		0x6D: ["TRIM", 1],
+		// 0x6E CLEAN
 		0x6F: ["T", 1]
+		// 0x70 V
 	};
 	var BinOpTab = [
-		  "",   "",   "",   "",   "",   "",   "",   "",
-		  "",  "+",  "-",  "*",  "/",  "^",  "=", "<>",
-		"<=", ">=",  "<",  ">",   "",   "",   "",   "",
-		 "&",   "",   "",   "",   "",   "",   "",   ""
+		  "",   "",   "",   "",   "",   "",   "",   "", // eslint-disable-line no-mixed-spaces-and-tabs
+		  "",  "+",  "-",  "*",  "/",  "^",  "=", "<>", // eslint-disable-line no-mixed-spaces-and-tabs
+		"<=", ">=",  "<",  ">",   "",   "",   "",   "", // eslint-disable-line no-mixed-spaces-and-tabs
+		 "&",   "",   "",   "",   "",   "",   "",   ""  // eslint-disable-line no-mixed-spaces-and-tabs
 	];
 
 	function wk1_fmla_to_csf(blob, o) {
 		prep_blob(blob, 0);
-		var out = [], argc = 0, R = "", C = "";
+		var out = [], argc = 0, R = "", C = "", argL = "", argR = "";
 		while(blob.l < blob.length) {
 			var cc = blob[blob.l++];
 			switch(cc) {
@@ -382,7 +520,7 @@ var WK_ = /*#__PURE__*/ (function() {
 				case 0x06: {
 					/* TODO: text encoding */
 					var Z = ""; while((cc = blob[blob.l++])) Z += String.fromCharCode(cc);
-					out.push('"' + Z.replace(/"/g, '""') + '"'); break;
+					out.push('"' + Z.replace(/"/g, '""') + '"');
 				} break;
 
 				case 0x08: out.push("-" + out.pop()); break;
@@ -390,7 +528,7 @@ var WK_ = /*#__PURE__*/ (function() {
 				case 0x16: out.push("NOT(" + out.pop() + ")"); break;
 
 				case 0x14: case 0x15: {
-					var argR = out.pop(), argL = out.pop();
+					argR = out.pop(); argL = out.pop();
 					out.push(["AND", "OR"][cc - 0x14] + "(" + argL + "," + argR + ")");
 				} break;
 
@@ -531,9 +669,30 @@ var WK_ = /*#__PURE__*/ (function() {
 	}
 
 	function parse_FORMULA_28(blob, length) {
-		var o = parse_NUMBER_27(blob, 14);
-		blob.l += length - 10; /* TODO: formula */
+		var o = parse_NUMBER_27(blob, 12);
+		blob.l += length - 12; /* TODO: formula */
 		return o;
+	}
+
+	function parse_SHEETNAMECS(blob, length) {
+		return blob[blob.l + length - 1] == 0 ? blob.read_shift(length, 'cstr') : "";
+	}
+
+	function parse_SHEETNAMELP(blob, length) {
+		var len = blob[blob.l++];
+		if(len > length - 1) len = length - 1;
+		var o = ""; while(o.length < len) o += String.fromCharCode(blob[blob.l++]);
+		return o;
+	}
+
+	function parse_SHEETINFOQP(blob, length, opts) {
+		if(!opts.qpro || length < 21) return;
+		var id = blob.read_shift(1);
+		blob.l += 17;
+		blob.l += 1; //var len = blob.read_shift(1);
+		blob.l += 2;
+		var nm = blob.read_shift(length - 21, 'cstr');
+		return [id, nm];
 	}
 
 	function parse_XFORMAT(blob, length) {
@@ -601,7 +760,7 @@ var WK_ = /*#__PURE__*/ (function() {
 		/*::[*/0x0030/*::]*/: { n:"UNFORMATTED" },
 		/*::[*/0x0031/*::]*/: { n:"CURSORW12" },
 		/*::[*/0x0032/*::]*/: { n:"WINDOW" },
-		/*::[*/0x0033/*::]*/: { n:"STRING", f:parse_LABEL },
+		/*::[*/0x0033/*::]*/: { n:"STRING", f:parse_STRING },
 		/*::[*/0x0037/*::]*/: { n:"PASSWORD" },
 		/*::[*/0x0038/*::]*/: { n:"LOCKED" },
 		/*::[*/0x003C/*::]*/: { n:"QUERY" },
@@ -623,6 +782,9 @@ var WK_ = /*#__PURE__*/ (function() {
 		/*::[*/0x0067/*::]*/: { n:"RRANGES??" },
 		/*::[*/0x0068/*::]*/: { n:"FNAME??" },
 		/*::[*/0x0069/*::]*/: { n:"MRANGES??" },
+		/*::[*/0x00CC/*::]*/: { n:"SHEETNAMECS", f:parse_SHEETNAMECS },
+		/*::[*/0x00DE/*::]*/: { n:"SHEETNAMELP", f:parse_SHEETNAMELP },
+		/*::[*/0x00FF/*::]*/: { n:"BOF", f:parseuint16 },
 		/*::[*/0xFFFF/*::]*/: { n:"" }
 	};
 
@@ -688,6 +850,7 @@ var WK_ = /*#__PURE__*/ (function() {
 		/*::[*/0x00BC/*::]*/: { n:"??" },
 		/*::[*/0x00C3/*::]*/: { n:"??" },
 		/*::[*/0x00C9/*::]*/: { n:"??" },
+		/*::[*/0x00CC/*::]*/: { n:"SHEETNAMECS", f:parse_SHEETNAMECS },
 		/*::[*/0x00CD/*::]*/: { n:"??" },
 		/*::[*/0x00CE/*::]*/: { n:"??" },
 		/*::[*/0x00CF/*::]*/: { n:"??" },
@@ -732,6 +895,7 @@ var WK_ = /*#__PURE__*/ (function() {
 		/*::[*/0x029A/*::]*/: { n:"??" },
 		/*::[*/0x0300/*::]*/: { n:"??" },
 		/*::[*/0x0304/*::]*/: { n:"??" },
+		/*::[*/0x0601/*::]*/: { n:"SHEETINFOQP", f:parse_SHEETINFOQP },
 		/*::[*/0x0640/*::]*/: { n:"??" },
 		/*::[*/0x0642/*::]*/: { n:"??" },
 		/*::[*/0x0701/*::]*/: { n:"??" },
@@ -749,6 +913,144 @@ var WK_ = /*#__PURE__*/ (function() {
 		/*::[*/0x6F44/*::]*/: { n:"??" },
 		/*::[*/0xFFFF/*::]*/: { n:"" }
 	};
+
+	/* QPW uses a different set of record types */
+	function qpw_to_workbook_buf(d, opts)/*:Workbook*/ {
+		prep_blob(d, 0);
+		var o = opts || {};
+		if(DENSE != null && o.dense == null) o.dense = DENSE;
+		var s/*:Worksheet*/ = ((o.dense ? [] : {})/*:any*/);
+		var SST = [], sname = "", formulae = [];
+		var range = {s:{r:-1,c:-1}, e:{r:-1,c:-1}};
+		var cnt = 0, type = 0, C = 0, R = 0;
+		var wb = { SheetNames: [], Sheets: {} };
+		outer: while(d.l < d.length) {
+			var RT = d.read_shift(2), length = d.read_shift(2);
+			var p = d.slice(d.l, d.l + length);
+			prep_blob(p, 0);
+			switch(RT) {
+				case 0x01: /* BOF */
+					if(p.read_shift(4) != 0x39575051) throw "Bad QPW9 BOF!";
+					break;
+				case 0x02: /* EOF */ break outer;
+
+				/* TODO: The behavior here should be consistent with Numbers: QP Notebook ~ .TN.SheetArchive, QP Sheet ~ .TST.TableModelArchive */
+				case 0x0401: /* BON */ break;
+				case 0x0402: /* EON */ /* TODO: backfill missing sheets based on BON cnt */ break;
+
+				case 0x0407: { /* SST */
+					p.l += 12;
+					while(p.l < p.length) {
+						cnt = p.read_shift(2);
+						type = p.read_shift(1);
+						SST.push(p.read_shift(cnt, 'cstr'));
+					}
+				} break;
+				case 0x0408: { /* FORMULAE */
+					//p.l += 12;
+					//while(p.l < p.length) {
+					//	cnt = p.read_shift(2);
+					//	formulae.push(p.slice(p.l, p.l + cnt + 1)); p.l += cnt + 1;
+					//}
+				} break;
+
+				case 0x0601: { /* BOS */
+					var sidx = p.read_shift(2);
+					s = ((o.dense ? [] : {})/*:any*/);
+					range.s.c = p.read_shift(2);
+					range.e.c = p.read_shift(2);
+					range.s.r = p.read_shift(4);
+					range.e.r = p.read_shift(4);
+					p.l += 4;
+					if(p.l + 2 < p.length) {
+						cnt = p.read_shift(2);
+						type = p.read_shift(1);
+						sname = cnt == 0 ? "" : p.read_shift(cnt, 'cstr');
+					}
+					if(!sname) sname = encode_col(sidx);
+					/* TODO: backfill empty sheets */
+				} break;
+				case 0x0602: { /* EOS */
+					/* NOTE: QP valid range A1:IV1000000 */
+					if(range.s.c > 0xFF || range.s.r > 999999) break;
+					if(range.e.c < range.s.c) range.e.c = range.s.c;
+					if(range.e.r < range.s.r) range.e.r = range.s.r;
+					s["!ref"] = encode_range(range);
+					book_append_sheet(wb, s, sname); // TODO: a barrel roll
+				} break;
+
+				case 0x0A01: { /* COL (like XLS Row, modulo the layout transposition) */
+					C = p.read_shift(2);
+					if(range.e.c < C) range.e.c = C;
+					if(range.s.c > C) range.s.c = C;
+					R = p.read_shift(4);
+					if(range.s.r > R) range.s.r = R;
+					R = p.read_shift(4);
+					if(range.e.r < R) range.e.r = R;
+				} break;
+
+				case 0x0C01: { /* MulCells (like XLS MulRK, but takes advantage of common column data patterns) */
+					R = p.read_shift(4), cnt = p.read_shift(4);
+					if(range.s.r > R) range.s.r = R;
+					if(range.e.r < R + cnt - 1) range.e.r = R + cnt - 1;
+					while(p.l < p.length) {
+						var cell = { t: "z" };
+						var flags = p.read_shift(1);
+						if(flags & 0x80) p.l += 2;
+						var mul = (flags & 0x40) ? p.read_shift(2) - 1: 0;
+						switch(flags & 0x1F) {
+							case 1: break;
+							case 2: cell = { t: "n", v: p.read_shift(2) }; break;
+							case 3: cell = { t: "n", v: p.read_shift(2, 'i') }; break;
+							case 5: cell = { t: "n", v: p.read_shift(8, 'f') }; break;
+							case 7: cell = { t: "s", v: SST[type = p.read_shift(4) - 1] }; break;
+							case 8: cell = { t: "n", v: p.read_shift(8, 'f') }; p.l += 2; /* cell.f = formulae[p.read_shift(4)]; */ p.l += 4; break;
+							default: throw "Unrecognized QPW cell type " + (flags & 0x1F);
+						}
+						var delta = 0;
+						if(flags & 0x20) switch(flags & 0x1F) {
+							case 2: delta = p.read_shift(2); break;
+							case 3: delta = p.read_shift(2, 'i'); break;
+							case 7: delta = p.read_shift(2); break;
+							default: throw "Unsupported delta for QPW cell type " + (flags & 0x1F);
+						}
+						if(!(!o.sheetStubs && cell.t == "z")) {
+							if(Array.isArray(s)) {
+								if(!s[R]) s[R] = [];
+								s[R][C] = cell;
+							} else s[encode_cell({r:R, c:C})] = cell;
+						}
+						++R; --cnt;
+						while(mul-- > 0 && cnt >= 0) {
+							if(flags & 0x20) switch(flags & 0x1F) {
+								case 2: cell = { t: "n", v: (cell.v + delta) & 0xFFFF }; break;
+								case 3: cell = { t: "n", v: (cell.v + delta) & 0xFFFF }; if(cell.v > 0x7FFF) cell.v -= 0x10000; break;
+								case 7: cell = { t: "s", v: SST[type = (type + delta) >>> 0] }; break;
+								default: throw "Cannot apply delta for QPW cell type " + (flags & 0x1F);
+							} else switch(flags & 0x1F) {
+								case 1: cell = { t: "z" }; break;
+								case 2: cell = { t: "n", v: p.read_shift(2) }; break;
+								case 7: cell = { t: "s", v: SST[type = p.read_shift(4) - 1] }; break;
+								default: throw "Cannot apply repeat for QPW cell type " + (flags & 0x1F);
+							}
+							if(!(!o.sheetStubs && cell.t == "z")) {
+								if(Array.isArray(s)) {
+									if(!s[R]) s[R] = [];
+									s[R][C] = cell;
+								} else s[encode_cell({r:R, c:C})] = cell;
+							}
+							++R; --cnt;
+						}
+					}
+				} break;
+
+				default: break;
+			}
+			d.l += length;
+		}
+		return wb;
+	}
+
 	return {
 		sheet_to_wk1: sheet_to_wk1,
 		book_to_wk3: book_to_wk3,

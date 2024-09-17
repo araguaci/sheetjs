@@ -1,4 +1,5 @@
 /* [MS-OLEPS] 2.2 PropertyType */
+// Note: some tree shakers cannot handle VT_VECTOR | $CONST, hence extra vars
 //var VT_EMPTY    = 0x0000;
 //var VT_NULL     = 0x0001;
 var VT_I2       = 0x0002;
@@ -20,7 +21,7 @@ var VT_UI4      = 0x0013;
 //var VT_UI8      = 0x0015;
 //var VT_INT      = 0x0016;
 //var VT_UINT     = 0x0017;
-var VT_LPSTR    = 0x001E;
+//var VT_LPSTR    = 0x001E;
 //var VT_LPWSTR   = 0x001F;
 var VT_FILETIME = 0x0040;
 var VT_BLOB     = 0x0041;
@@ -32,7 +33,9 @@ var VT_BLOB     = 0x0041;
 var VT_CF       = 0x0047;
 //var VT_CLSID    = 0x0048;
 //var VT_VERSIONED_STREAM = 0x0049;
-var VT_VECTOR   = 0x1000;
+//var VT_VECTOR   = 0x1000;
+var VT_VECTOR_VARIANT = 0x100C;
+var VT_VECTOR_LPSTR   = 0x101E;
 //var VT_ARRAY    = 0x2000;
 
 var VT_STRING   = 0x0050; // 2.3.3.1.11 VtString
@@ -52,8 +55,8 @@ var DocSummaryPIDDSI = {
 	/*::[*/0x09/*::]*/: { n: 'HiddenCount', t: VT_I4 },
 	/*::[*/0x0a/*::]*/: { n: 'MultimediaClipCount', t: VT_I4 },
 	/*::[*/0x0b/*::]*/: { n: 'ScaleCrop', t: VT_BOOL },
-	/*::[*/0x0c/*::]*/: { n: 'HeadingPairs', t: VT_VECTOR | VT_VARIANT },
-	/*::[*/0x0d/*::]*/: { n: 'TitlesOfParts', t: VT_VECTOR | VT_LPSTR },
+	/*::[*/0x0c/*::]*/: { n: 'HeadingPairs', t: VT_VECTOR_VARIANT /* VT_VECTOR | VT_VARIANT */ },
+	/*::[*/0x0d/*::]*/: { n: 'TitlesOfParts', t: VT_VECTOR_LPSTR /* VT_VECTOR | VT_LPSTR */ },
 	/*::[*/0x0e/*::]*/: { n: 'Manager', t: VT_STRING },
 	/*::[*/0x0f/*::]*/: { n: 'Company', t: VT_STRING },
 	/*::[*/0x10/*::]*/: { n: 'LinksUpToDate', t: VT_BOOL },
@@ -100,9 +103,6 @@ var SummaryPIDSI = {
 	/*::[*/0x80000003/*::]*/: { n: 'Behavior', t: VT_UI4 },
 	/*::[*/0x72627262/*::]*/: {}
 };
-
-var DocSummaryRE/*:{[key:string]:string}*/ = evert_key(DocSummaryPIDDSI, "n");
-var SummaryRE/*:{[key:string]:string}*/ = evert_key(SummaryPIDSI, "n");
 
 /* [MS-XLS] 2.4.63 Country/Region codes */
 var CountryEnum = {
@@ -185,7 +185,7 @@ function rgbify(arr/*:Array<number>*/)/*:Array<[number, number, number]>*/ { ret
 
 /* [MS-XLS] 2.5.161 */
 /* [MS-XLSB] 2.5.75 Icv */
-var _XLSIcv = rgbify([
+var _XLSIcv = /*#__PURE__*/ rgbify([
 	/* Color Constants */
 	0x000000,
 	0xFFFFFF,
@@ -258,8 +258,8 @@ var _XLSIcv = rgbify([
 	0x333333,
 
 	/* Other entries to appease BIFF8/12 */
-	0xFFFFFF, /* 0x40 icvForeground ?? */
-	0x000000, /* 0x41 icvBackground ?? */
+	0x000000, /* 0x40 icvForeground ?? */
+	0xFFFFFF, /* 0x41 icvBackground ?? */
 	0x000000, /* 0x42 icvFrame ?? */
 	0x000000, /* 0x43 icv3D ?? */
 	0x000000, /* 0x44 icv3DText ?? */
@@ -277,7 +277,7 @@ var _XLSIcv = rgbify([
 	0x000000, /* 0x50 icvInfoBk ?? */
 	0x000000 /* 0x51 icvInfoText ?? */
 ]);
-var XLSIcv = dup(_XLSIcv);
+var XLSIcv = /*#__PURE__*/dup(_XLSIcv);
 
 /* [MS-XLSB] 2.5.97.2 */
 var BErr = {
@@ -291,4 +291,33 @@ var BErr = {
 	/*::[*/0x2B/*::]*/: "#GETTING_DATA",
 	/*::[*/0xFF/*::]*/: "#WTF?"
 };
-var RBErr = evert_num(BErr);
+//var RBErr = evert_num(BErr);
+var RBErr = {
+	"#NULL!":        0x00,
+	"#DIV/0!":       0x07,
+	"#VALUE!":       0x0F,
+	"#REF!":         0x17,
+	"#NAME?":        0x1D,
+	"#NUM!":         0x24,
+	"#N/A":          0x2A,
+	"#GETTING_DATA": 0x2B,
+	"#WTF?":         0xFF
+};
+
+var XLSLblBuiltIn = [
+	"_xlnm.Consolidate_Area",
+	"_xlnm.Auto_Open",
+	"_xlnm.Auto_Close",
+	"_xlnm.Extract",
+	"_xlnm.Database",
+	"_xlnm.Criteria",
+	"_xlnm.Print_Area",
+	"_xlnm.Print_Titles",
+	"_xlnm.Recorder",
+	"_xlnm.Data_Form",
+	"_xlnm.Auto_Activate",
+	"_xlnm.Auto_Deactivate",
+	"_xlnm.Sheet_Title",
+	"_xlnm._FilterDatabase"
+];
+
